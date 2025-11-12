@@ -3,7 +3,7 @@
 ## Quick Start
 
 
-curl -sSL https://gist.githubusercontent.com/deeshank/e15e2f5e15d3598ae0cfcd753345aa05/raw/dc7c0ee87531110c2f8f719eb293266ac571d753/bootstrapv1.sh | bash
+curl -sSL https://gist.githubusercontent.com/deeshank/e15e2f5e15d3598ae0cfcd753345aa05/raw/4b09cfe05055d7e422731da7d6eaf14c94b6ed39/bootstrapv2.sh | bash
 
 ### 1. Deploy on RunPod
 

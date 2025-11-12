@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
     # Startup
     logger.info("Starting up...")
-    load_i2v_model()
+    # load_i2v_model()  # Commented out to save memory
     load_t2v_model()
     yield
     # Shutdown (if needed)
@@ -274,16 +274,14 @@ worker_thread.start()
 @app.get("/")
 async def root():
     return {
-        "message": "Wan2.2 I2V & T2V API",
+        "message": "Wan2.2 T2V API (I2V Disabled)",
         "version": "2.0.0",
-        "models": {
-            "i2v": "Wan2.2-I2V-A14B",
-            "t2v": "Wan2.2-T2V-A14B",
-        },
+        "active_model": "Wan2.2-T2V-A14B",
+        "note": "I2V model is disabled to save memory. Only T2V is active.",
         "endpoints": {
             "health": "/health",
-            "generate_i2v": "/generate (POST) - Image-to-Video",
-            "generate_t2v": "/generate-t2v (POST) - Text-to-Video",
+            "generate_t2v": "/generate-t2v (POST) - Text-to-Video [ACTIVE]",
+            "generate_i2v": "/generate (POST) - Image-to-Video [DISABLED]",
             "status": "/status/{job_id} (GET)",
             "download": "/download/{job_id} (GET)",
             "jobs": "/jobs (GET)",
@@ -291,17 +289,10 @@ async def root():
             "cleanup": "/cleanup (POST)",
         },
         "supported_features": {
-            "i2v": {
-                "resolutions": ["1280*720 (720p)", "1024*576 (480p)", "custom"],
-                "image_only_generation": True,
-                "negative_prompts": True,
-            },
             "t2v": {
                 "resolutions": ["1280*720 (720p)", "1024*576 (480p)"],
                 "text_only_generation": True,
                 "negative_prompts": True,
-            },
-            "common": {
                 "frame_counts": "4n+1 (e.g., 81, 85, 89)",
                 "solvers": ["unipc", "dpm++"],
             }
@@ -315,7 +306,7 @@ async def health():
     return {
         "status": "healthy",
         "models": {
-            "i2v_loaded": i2v_model is not None,
+            "i2v_loaded": False,  # i2v_model is not None,  # Disabled to save memory
             "t2v_loaded": t2v_model is not None,
         },
         "gpu_available": torch.cuda.is_available(),
@@ -338,92 +329,13 @@ async def generate_video(
     seed: Optional[int] = Form(-1),
 ):
     """
-    Generate video from image and prompt
-    
-    Parameters:
-    - image: Input image file (required)
-    - prompt: Text prompt (optional, can be empty for image-only generation)
-    - negative_prompt: Negative prompt for content exclusion (optional)
-    - size: Video resolution area as "width*height" (e.g., "1280*720" or "1024*576")
-    - frame_num: Number of frames (must be 4n+1, default: 81)
-    - shift: Noise schedule shift (default: 5.0, use 3.0 for 480p)
-    - sampling_steps: Number of diffusion steps (default: 40)
-    - guide_scale: Guidance scale (default: 3.5)
-    - sample_solver: Solver type - "unipc" or "dpm++" (default: "unipc")
-    - seed: Random seed, -1 for random (default: -1)
+    I2V endpoint is currently DISABLED to save memory.
+    Use /generate-t2v for text-to-video generation instead.
     """
-    
-    # Validate image
-    if not image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    
-    # Validate parameters
-    if frame_num % 4 != 1:
-        raise HTTPException(status_code=400, detail="frame_num must be 4n+1 (e.g., 81, 85, 89)")
-    
-    if sample_solver not in ["unipc", "dpm++"]:
-        raise HTTPException(status_code=400, detail="sample_solver must be 'unipc' or 'dpm++'")
-    
-    # Parse size
-    try:
-        width, height = map(int, size.split("*"))
-        max_area = width * height
-    except:
-        raise HTTPException(status_code=400, detail="size must be in format 'width*height' (e.g., '1280*720')")
-    
-    # Create job ID
-    job_id = str(uuid.uuid4())
-    
-    # Save uploaded image
-    image_path = UPLOAD_DIR / f"{job_id}.jpg"
-    with open(image_path, "wb") as f:
-        content = await image.read()
-        f.write(content)
-    
-    # Create job
-    jobs[job_id] = {
-        "job_id": job_id,
-        "status": "queued",
-        "prompt": prompt,
-        "size": size,
-        "created_at": datetime.now().isoformat(),
-        "image_path": str(image_path),
-    }
-    
-    # Queue job
-    config = {
-        "max_area": max_area,
-        "frame_num": frame_num,
-        "shift": shift,
-        "sampling_steps": sampling_steps,
-        "guide_scale": guide_scale,
-        "seed": seed,
-        "n_prompt": negative_prompt,
-        "sample_solver": sample_solver,
-    }
-    
-    job_queue.put({
-        "type": "i2v",
-        "job_id": job_id,
-        "image_path": str(image_path),
-        "prompt": prompt,
-        "config": config,
-    })
-    
-    logger.info(f"I2V Job {job_id} queued (size: {size}, solver: {sample_solver}). Queue size: {job_queue.qsize()}")
-    
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "message": "Job queued successfully",
-        "type": "i2v",
-        "config": {
-            "size": size,
-            "frame_num": frame_num,
-            "sampling_steps": sampling_steps,
-            "sample_solver": sample_solver,
-        }
-    }
+    raise HTTPException(
+        status_code=503,
+        detail="I2V (Image-to-Video) is currently disabled to save memory. Please use /generate-t2v for Text-to-Video generation."
+    )
 
 
 @app.post("/generate-t2v")
