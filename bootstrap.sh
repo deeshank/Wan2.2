@@ -49,13 +49,11 @@ pip install -r requirements.txt
 echo "Installing FastAPI dependencies..."
 pip install fastapi uvicorn python-multipart aiofiles
 
-# Optional: Install Speech-to-Video dependencies (uncomment if needed)
-# echo "Installing Speech-to-Video dependencies..."
-# pip install -r requirements_s2v.txt
+echo "Installing Speech-to-Video dependencies (required for imports)..."
+pip install -r requirements_s2v.txt
 
-# Optional: Install Wan-Animate dependencies (uncomment if needed)
-# echo "Installing Wan-Animate dependencies..."
-# pip install -r requirements_animate.txt
+echo "Installing Wan-Animate dependencies (required for imports)..."
+pip install -r requirements_animate.txt
 
 # Download model weights if not present
 if [ -d "$MODEL_NAME" ]; then
