@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict
 from queue import Queue
 from threading import Thread
+from contextlib import asynccontextmanager
 
 import torch
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
@@ -20,7 +21,19 @@ from wan.configs import WAN_CONFIGS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Wan2.2 I2V API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    # Startup
+    logger.info("Starting up...")
+    load_model()
+    yield
+    # Shutdown (if needed)
+    logger.info("Shutting down...")
+
+
+app = FastAPI(title="Wan2.2 I2V API", lifespan=lifespan)
 
 # Configuration
 CKPT_DIR = "./Wan2.2-I2V-A14B"
@@ -152,13 +165,6 @@ def worker():
 # Start background worker
 worker_thread = Thread(target=worker, daemon=True)
 worker_thread.start()
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Preload model on startup"""
-    logger.info("Starting up...")
-    load_model()
 
 
 @app.get("/")
