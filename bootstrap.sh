@@ -55,13 +55,22 @@ pip install -r requirements_s2v.txt
 echo "Installing Wan-Animate dependencies (required for imports)..."
 pip install -r requirements_animate.txt
 
-# Download model weights if not present
+# Download I2V model weights if not present
 if [ -d "$MODEL_NAME" ]; then
-    echo "Model weights already exist at $MODEL_NAME"
+    echo "I2V model weights already exist at $MODEL_NAME"
 else
-    echo "Downloading model weights (~100GB, this will take 15-30 minutes)..."
+    echo "Downloading I2V model weights (~100GB, this will take 15-30 minutes)..."
     pip install "huggingface_hub[cli]"
     huggingface-cli download Wan-AI/$MODEL_NAME --local-dir ./$MODEL_NAME
+fi
+
+# Download T2V model weights if not present
+T2V_MODEL_NAME="Wan2.2-T2V-A14B"
+if [ -d "$T2V_MODEL_NAME" ]; then
+    echo "T2V model weights already exist at $T2V_MODEL_NAME"
+else
+    echo "Downloading T2V model weights (~100GB, this will take 15-30 minutes)..."
+    huggingface-cli download Wan-AI/$T2V_MODEL_NAME --local-dir ./$T2V_MODEL_NAME
 fi
 
 echo "=========================================="

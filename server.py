@@ -15,8 +15,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 import uvicorn
 
-from wan import WanI2V
-from wan.configs import WAN_CONFIGS
+from wan import WanI2V, WanT2V
+from wan.configs import WAN_CONFIGS, SIZE_CONFIGS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,16 +27,18 @@ async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
     # Startup
     logger.info("Starting up...")
-    load_model()
+    load_i2v_model()
+    load_t2v_model()
     yield
     # Shutdown (if needed)
     logger.info("Shutting down...")
 
 
-app = FastAPI(title="Wan2.2 I2V API", lifespan=lifespan)
+app = FastAPI(title="Wan2.2 I2V & T2V API", lifespan=lifespan)
 
 # Configuration
-CKPT_DIR = "./Wan2.2-I2V-A14B"
+I2V_CKPT_DIR = "./Wan2.2-I2V-A14B"
+T2V_CKPT_DIR = "./Wan2.2-T2V-A14B"
 OUTPUT_DIR = Path("./outputs")
 OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR = Path("./uploads")
@@ -46,19 +48,20 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 jobs: Dict[str, dict] = {}
 job_queue = Queue()
 
-# Model instance (loaded once)
-model = None
+# Model instances (loaded once)
+i2v_model = None
+t2v_model = None
 
 
-def load_model():
+def load_i2v_model():
     """Load the Wan I2V model"""
-    global model
-    if model is None:
+    global i2v_model
+    if i2v_model is None:
         logger.info("Loading Wan2.2 I2V model...")
         cfg = WAN_CONFIGS["i2v-A14B"]
-        model = WanI2V(
+        i2v_model = WanI2V(
             config=cfg,
-            checkpoint_dir=CKPT_DIR,
+            checkpoint_dir=I2V_CKPT_DIR,
             device_id=0,
             rank=0,
             t5_fsdp=False,
@@ -68,17 +71,39 @@ def load_model():
             init_on_cpu=True,
             convert_model_dtype=True,
         )
-        logger.info("Model loaded successfully")
-    return model
+        logger.info("I2V model loaded successfully")
+    return i2v_model
 
 
-def process_job(job_id: str, image_path: str, prompt: str, config: dict):
-    """Process a single video generation job"""
+def load_t2v_model():
+    """Load the Wan T2V model"""
+    global t2v_model
+    if t2v_model is None:
+        logger.info("Loading Wan2.2 T2V model...")
+        cfg = WAN_CONFIGS["t2v-A14B"]
+        t2v_model = WanT2V(
+            config=cfg,
+            checkpoint_dir=T2V_CKPT_DIR,
+            device_id=0,
+            rank=0,
+            t5_fsdp=False,
+            dit_fsdp=False,
+            use_sp=False,
+            t5_cpu=False,
+            init_on_cpu=True,
+            convert_model_dtype=True,
+        )
+        logger.info("T2V model loaded successfully")
+    return t2v_model
+
+
+def process_i2v_job(job_id: str, image_path: str, prompt: str, config: dict):
+    """Process a single I2V video generation job"""
     try:
         jobs[job_id]["status"] = "processing"
         jobs[job_id]["started_at"] = datetime.now().isoformat()
         
-        logger.info(f"Job {job_id}: Starting generation")
+        logger.info(f"Job {job_id}: Starting I2V generation")
         logger.info(f"Job {job_id}: Config - size: {config.get('max_area')}, frames: {config.get('frame_num')}, "
                    f"steps: {config.get('sampling_steps')}, solver: {config.get('sample_solver')}")
         
@@ -87,7 +112,7 @@ def process_job(job_id: str, image_path: str, prompt: str, config: dict):
         logger.info(f"Job {job_id}: Image loaded - size: {img.size}")
         
         # Load model
-        wan_model = load_model()
+        wan_model = load_i2v_model()
         
         # Generate video
         logger.info(f"Job {job_id}: Starting video generation...")
@@ -146,6 +171,75 @@ def process_job(job_id: str, image_path: str, prompt: str, config: dict):
         torch.cuda.empty_cache()
 
 
+def process_t2v_job(job_id: str, prompt: str, config: dict):
+    """Process a single T2V video generation job"""
+    try:
+        jobs[job_id]["status"] = "processing"
+        jobs[job_id]["started_at"] = datetime.now().isoformat()
+        
+        logger.info(f"Job {job_id}: Starting T2V generation")
+        logger.info(f"Job {job_id}: Config - size: {config.get('size')}, frames: {config.get('frame_num')}, "
+                   f"steps: {config.get('sampling_steps')}, solver: {config.get('sample_solver')}")
+        
+        # Load model
+        wan_model = load_t2v_model()
+        
+        # Generate video
+        logger.info(f"Job {job_id}: Starting video generation...")
+        video = wan_model.generate(
+            input_prompt=prompt,
+            size=config.get("size", (1280, 720)),
+            frame_num=config.get("frame_num", 81),
+            shift=config.get("shift", 12.0),
+            sample_solver=config.get("sample_solver", "unipc"),
+            sampling_steps=config.get("sampling_steps", 40),
+            guide_scale=config.get("guide_scale", 3.0),
+            n_prompt=config.get("n_prompt", ""),
+            seed=config.get("seed", -1),
+            offload_model=True,
+        )
+        
+        # Save video
+        output_path = OUTPUT_DIR / f"{job_id}.mp4"
+        logger.info(f"Job {job_id}: Saving video to {output_path}")
+        
+        from wan.utils.utils import save_video
+        save_video(
+            tensor=video[None],
+            save_file=str(output_path),
+            fps=16,
+            nrow=1,
+            normalize=True,
+            value_range=(-1, 1),
+        )
+        
+        # Get file size
+        file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        jobs[job_id]["output_path"] = str(output_path)
+        jobs[job_id]["file_size_mb"] = round(file_size_mb, 2)
+        
+        logger.info(f"Job {job_id}: Completed successfully (file size: {file_size_mb:.2f} MB)")
+        
+        # Clean up CUDA cache
+        torch.cuda.empty_cache()
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Job {job_id}: Failed with error: {str(e)}")
+        logger.error(f"Job {job_id}: Traceback:\n{error_trace}")
+        
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        
+        # Clean up CUDA cache on error
+        torch.cuda.empty_cache()
+
+
 def worker():
     """Background worker to process jobs from queue"""
     while True:
@@ -153,12 +247,22 @@ def worker():
         if job_data is None:
             break
         
-        process_job(
-            job_data["job_id"],
-            job_data["image_path"],
-            job_data["prompt"],
-            job_data["config"],
-        )
+        job_type = job_data.get("type", "i2v")
+        
+        if job_type == "i2v":
+            process_i2v_job(
+                job_data["job_id"],
+                job_data["image_path"],
+                job_data["prompt"],
+                job_data["config"],
+            )
+        elif job_type == "t2v":
+            process_t2v_job(
+                job_data["job_id"],
+                job_data["prompt"],
+                job_data["config"],
+            )
+        
         job_queue.task_done()
 
 
@@ -170,22 +274,37 @@ worker_thread.start()
 @app.get("/")
 async def root():
     return {
-        "message": "Wan2.2 I2V API",
-        "version": "1.0.0",
-        "model": "Wan2.2-I2V-A14B",
+        "message": "Wan2.2 I2V & T2V API",
+        "version": "2.0.0",
+        "models": {
+            "i2v": "Wan2.2-I2V-A14B",
+            "t2v": "Wan2.2-T2V-A14B",
+        },
         "endpoints": {
             "health": "/health",
-            "generate": "/generate (POST)",
+            "generate_i2v": "/generate (POST) - Image-to-Video",
+            "generate_t2v": "/generate-t2v (POST) - Text-to-Video",
             "status": "/status/{job_id} (GET)",
             "download": "/download/{job_id} (GET)",
+            "jobs": "/jobs (GET)",
             "delete": "/job/{job_id} (DELETE)",
+            "cleanup": "/cleanup (POST)",
         },
         "supported_features": {
-            "resolutions": ["1280*720 (720p)", "1024*576 (480p)", "custom"],
-            "frame_counts": "4n+1 (e.g., 81, 85, 89)",
-            "solvers": ["unipc", "dpm++"],
-            "image_only_generation": True,
-            "negative_prompts": True,
+            "i2v": {
+                "resolutions": ["1280*720 (720p)", "1024*576 (480p)", "custom"],
+                "image_only_generation": True,
+                "negative_prompts": True,
+            },
+            "t2v": {
+                "resolutions": ["1280*720 (720p)", "1024*576 (480p)"],
+                "text_only_generation": True,
+                "negative_prompts": True,
+            },
+            "common": {
+                "frame_counts": "4n+1 (e.g., 81, 85, 89)",
+                "solvers": ["unipc", "dpm++"],
+            }
         }
     }
 
@@ -195,7 +314,10 @@ async def health():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
+        "models": {
+            "i2v_loaded": i2v_model is not None,
+            "t2v_loaded": t2v_model is not None,
+        },
         "gpu_available": torch.cuda.is_available(),
         "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "queue_size": job_queue.qsize(),
@@ -281,18 +403,113 @@ async def generate_video(
     }
     
     job_queue.put({
+        "type": "i2v",
         "job_id": job_id,
         "image_path": str(image_path),
         "prompt": prompt,
         "config": config,
     })
     
-    logger.info(f"Job {job_id} queued (size: {size}, solver: {sample_solver}). Queue size: {job_queue.qsize()}")
+    logger.info(f"I2V Job {job_id} queued (size: {size}, solver: {sample_solver}). Queue size: {job_queue.qsize()}")
     
     return {
         "job_id": job_id,
         "status": "queued",
         "message": "Job queued successfully",
+        "type": "i2v",
+        "config": {
+            "size": size,
+            "frame_num": frame_num,
+            "sampling_steps": sampling_steps,
+            "sample_solver": sample_solver,
+        }
+    }
+
+
+@app.post("/generate-t2v")
+async def generate_t2v_video(
+    prompt: str = Form(...),
+    negative_prompt: Optional[str] = Form(""),
+    size: Optional[str] = Form("1280*720"),
+    frame_num: Optional[int] = Form(81),
+    shift: Optional[float] = Form(12.0),
+    sampling_steps: Optional[int] = Form(40),
+    guide_scale: Optional[float] = Form(3.0),
+    sample_solver: Optional[str] = Form("unipc"),
+    seed: Optional[int] = Form(-1),
+):
+    """
+    Generate video from text prompt only (Text-to-Video)
+    
+    Parameters:
+    - prompt: Text prompt describing the video (required)
+    - negative_prompt: Negative prompt for content exclusion (optional)
+    - size: Video resolution as "width*height" (e.g., "1280*720" or "1024*576")
+    - frame_num: Number of frames (must be 4n+1, default: 81)
+    - shift: Noise schedule shift (default: 12.0 for T2V)
+    - sampling_steps: Number of diffusion steps (default: 40)
+    - guide_scale: Guidance scale (default: 3.0 for T2V)
+    - sample_solver: Solver type - "unipc" or "dpm++" (default: "unipc")
+    - seed: Random seed, -1 for random (default: -1)
+    """
+    
+    # Validate prompt
+    if not prompt or prompt.strip() == "":
+        raise HTTPException(status_code=400, detail="Prompt is required for T2V generation")
+    
+    # Validate parameters
+    if frame_num % 4 != 1:
+        raise HTTPException(status_code=400, detail="frame_num must be 4n+1 (e.g., 81, 85, 89)")
+    
+    if sample_solver not in ["unipc", "dpm++"]:
+        raise HTTPException(status_code=400, detail="sample_solver must be 'unipc' or 'dpm++'")
+    
+    # Parse size
+    try:
+        width, height = map(int, size.split("*"))
+        size_tuple = (width, height)
+    except:
+        raise HTTPException(status_code=400, detail="size must be in format 'width*height' (e.g., '1280*720')")
+    
+    # Create job ID
+    job_id = str(uuid.uuid4())
+    
+    # Create job
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "type": "t2v",
+        "prompt": prompt,
+        "size": size,
+        "created_at": datetime.now().isoformat(),
+    }
+    
+    # Queue job
+    config = {
+        "size": size_tuple,
+        "frame_num": frame_num,
+        "shift": shift,
+        "sampling_steps": sampling_steps,
+        "guide_scale": guide_scale,
+        "seed": seed,
+        "n_prompt": negative_prompt,
+        "sample_solver": sample_solver,
+    }
+    
+    job_queue.put({
+        "type": "t2v",
+        "job_id": job_id,
+        "prompt": prompt,
+        "config": config,
+    })
+    
+    logger.info(f"T2V Job {job_id} queued (size: {size}, solver: {sample_solver}). Queue size: {job_queue.qsize()}")
+    
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Job queued successfully",
+        "type": "t2v",
         "config": {
             "size": size,
             "frame_num": frame_num,
