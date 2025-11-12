@@ -196,7 +196,7 @@ def process_t2v_job(job_id: str, prompt: str, config: dict):
             guide_scale=config.get("guide_scale", 3.0),
             n_prompt=config.get("n_prompt", ""),
             seed=config.get("seed", -1),
-            offload_model=True,
+            offload_model=False,  # Keep on GPU for A100 80GB - much faster!
         )
         
         # Save video
